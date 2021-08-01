@@ -1,0 +1,285 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ON-DEMAND-FORK: A Microsecond Fork for Memory-Intensive and Latency-Sensitive Application | windchang1999&#39;s blog</title>
+<link rel="shortcut icon" href="https://windchang1999.github.io/favicon.ico?v=1627826615826">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://windchang1999.github.io/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="ON-DEMAND-FORK: A Microsecond Fork for Memory-Intensive and Latency-Sensitive Application | windchang1999&#39;s blog - Atom Feed" href="https://windchang1999.github.io/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="内存密集场景下的一中 fork 的优化实现。EuroSys'21, from Purdue University
+
+1. Introduction
+在通常的 fork 实现中，通过 COW 机制避免了父进程所有物理页的复制，但仍然需要将进程..." />
+    <meta name="keywords" content="论文笔记" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="https://cdn.bootcss.com/highlight.js/9.12.0/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://windchang1999.github.io">
+  <img class="avatar" src="https://windchang1999.github.io/images/avatar.png?v=1627826615826" alt="">
+  </a>
+  <h1 class="site-title">
+    windchang1999&#39;s blog
+  </h1>
+  <p class="site-description">
+    
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="/post/about" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              ON-DEMAND-FORK: A Microsecond Fork for Memory-Intensive and Latency-Sensitive Application
+            </h2>
+            <div class="post-info">
+              <span>
+                2021-08-01
+              </span>
+              <span>
+                7 min read
+              </span>
+              
+                <a href="https://windchang1999.github.io/tag/Fddl1awQ2/" class="post-tag">
+                  # 论文笔记
+                </a>
+              
+            </div>
+            
+              <img class="post-feature-image" src="https://windchang1999.github.io/post-images/on-demand-fork-a-microsecond-fork-for-memory-intensive-and-latency-sensitive-application.png" alt="">
+            
+            <div class="post-content-wrapper">
+              <div class="post-content">
+                <p>内存密集场景下的一中 fork 的优化实现。EuroSys'21, from Purdue University</p>
+<!-- more -->
+<h1 id="1-introduction">1. Introduction</h1>
+<p>在通常的 fork 实现中，通过 COW 机制避免了父进程所有物理页的复制，但仍然需要将进程相关的内核状态全部复制，例如页表、文件描述符及 namespace。on-demand-fork 将 COW 机制拓展到最后一级页表，避免了内存密集型应用在 fork 过程中复制最后一级页表的开销。</p>
+<h1 id="2-background-motivation">2. Background &amp; Motivation</h1>
+<p>在快照（Redis），测试（AFL）及虚拟机测试等内存密集型场景下，执行 fork 系统调用需要花费大量的时间。当前 fork 的实现，存在以下两点不足：</p>
+<ol>
+<li>fork 复制的页表的数量与其所占用的内存大小约成正比。复制大量页表会带来一定程度的延迟，例如在 1GB 内存占用延迟为 6.5ms，50GB 内存占用延迟为 253.9ms。</li>
+<li>在多个进程并发使用 fork 系统调用时，由于需要原子性地更新物理页的引用计数，因此存在竞争关系，并发拓展性较差。例如3个进程同时执行 fork 时 1GB 内存占用对应的延迟为 22.4 ms。<br>
+<img src="https://windchang1999.github.io/post-images/1627784999191.png" alt="" loading="lazy"><br>
+一种解决方案是使用 huge page，但其存在内部碎片大，缺页中断开销大，并且会降低子进程和父进程共享物理页的机会等缺陷。这些特性都会增加程序的 tail latency。<br>
+在 on-demand-fork 过程中，子进程与父进程共享最后一级页表，将最后一级页表的复制工作，以及物理页引用计数的更新，推迟到需要写入内存或是需要修改进程的虚拟内存空间时执行。从而降低 fork 调用的延迟，并提高并发性能。</li>
+</ol>
+<h1 id="3-implementation">3. Implementation</h1>
+<figure data-type="image" tabindex="1"><img src="https://windchang1999.github.io/post-images/1627787173054.png" alt="" loading="lazy"></figure>
+<h2 id="31-overview">3.1 Overview</h2>
+<p>修改内容：</p>
+<ol>
+<li>为最后一级页表添加一个引用计数器</li>
+<li>修改 page fault handler，除了复制对应的数据物理页，还需要复制最后一级页表，并修改相关页表及数据物理页的引用计数器</li>
+<li>修改物理页的 Free 逻辑，对一个引用计数为1的物理页的 free 操作，必须检查其页表的引用计数</li>
+<li>修改 munmap、mremap 等函数的逻辑，在改变进程的虚拟地址空间映射时，如果涉及到的最后一级页表处在共享状态，则必须对最后一级页表采取相应的操作</li>
+</ol>
+<h2 id="32-fork-过程中页表复制流程">3.2 fork 过程中页表复制流程</h2>
+<p>如上图，在子进程中建立前三级页表，第三级页表的内容则复制于父进程，使得 PMD 指向同一个第四级页表，更新第四级页表的引用计数器。通过 MMU 提供的 hierachical attribute 特性，将第三级页表 PMD 的 writeable 位置 0 来标记整个第四级页表为不可写状态。<br>
+在 on-demand-fork 过程中不涉及到物理页的引用计数的修改，因此提高了并发性能。</p>
+<h2 id="33-对内存写引起-page-fault-的流程">3.3 对内存写引起 Page Fault 的流程</h2>
+<p>如果共享最后一级页表的进程执行了写操作，那么 PMD 中的 writeable 位则会引起 page fault。在中断处理程序中，需要：</p>
+<ol>
+<li>复制最后一级页表，更新 PMD 指向新的最后一级页表，降低其引用计数</li>
+<li>复制数据物理页，更新 PTE 指向新的数据物理页<br>
+&lt;需要插入一张图片&gt;</li>
+</ol>
+<h2 id="34-unmapping-or-remapping-vmas">3.4 Unmapping or Remapping VMAs</h2>
+<p>Unmapping 和 Remapping 需要修改进程的页表内容，因此如果修改过程中发现共享的最后一级页表，那么则需要执行相应的操作。以 munmap 为例：</p>
+<ol>
+<li>如果进程中仅有 1 个 VMA 使用了共享的最后一级页表，那么可以直接断开 PMD 到 PTE 的连接，降低最后一级页表的引用计数</li>
+<li>如果进程中有多个 VMA 使用了共享的最后一级页表，那么则需要对最后一级页表执行 COW 操作<br>
+如何检测两个 VMA 是否使用了同一个最后一级页表？最后一级页表映射了 page_size * NR_PTEs 的空间大小，比较两个 VMA 的地址的高位即可。</li>
+</ol>
+<h1 id="4-evaluation">4. Evaluation</h1>
+<h2 id="40-setup">4.0 Setup</h2>
+<p>CPU：16-core AMD EPYC 7302P CPU<br>
+Memory：256 GB<br>
+Linux Kernel Version：5.6.19</p>
+<h2 id="41-microbenchmarks">4.1 Microbenchmarks</h2>
+<h3 id="411-system-call-latency">4.1.1 System Call Latency</h3>
+<p><img src="https://windchang1999.github.io/post-images/1627823295825.png" alt="" loading="lazy"><br>
+因为不需要在 fork 过程中复制最后一级页表，因此 on-demand-fork 的执行时间更短。在 1GB 内存占用时所需时间约为 1/65，在 50GB 内存占用时所需时间约为 1/270。而 on-demand-fork 比使用了 huge page 的 fork 更快还与 huge page 需要在 fork 过程中给 PMD 加锁的原因。</p>
+<h3 id="412-page-fault-handling-overhead">4.1.2 Page Fault Handling Overhead</h3>
+<p><img src="https://windchang1999.github.io/post-images/1627824064954.png" alt="" loading="lazy"><br>
+on-demand-fork 的缺页中断执行时间约为通常 fork 的 5.3 倍，后续的原因需要思考一下。因为在中断处理程序中只是需要多复制一个最后一级页表，以及需要设置最后一级页表的引用计数。可能与引用计数器需要使用原子指令进行操作有关。<br>
+on-demand-fork 的缺页中断执行时间比使用 huge page 的 fork 短是自然的，毕竟 huge page 的缺页中断需要复制 2MB 的物理页，是 4KB 物理页的 512 倍。</p>
+<h3 id="413-overall-performance">4.1.3 Overall Performance</h3>
+<p><img src="https://windchang1999.github.io/post-images/1627824495354.png" alt="" loading="lazy"><br>
+在本次测试中，应用占用了 50GB 的内存。<br>
+访问内存的区域越多，访存操作中写操作越多，则在 on-demand-fork 中需要执行更多的最后一级页表及物理页的 COW 操作，摊平了on-demand-fork 带来的加速效果。在最坏情况，即需要写入所有的内存区域时，则几乎没有加速效果（仅 4%）。</p>
+<h2 id="42-real-world-applications">4.2 Real-world Applications</h2>
+<h3 id="421-fuzzing-afl">4.2.1 Fuzzing: AFL</h3>
+<p><img src="https://windchang1999.github.io/post-images/1627825367579.png" alt="" loading="lazy"><br>
+吞吐量约有 2.2 倍的提升。</p>
+<h3 id="422-unit-testing-sqlite">4.2.2 Unit Testing: SQLite</h3>
+<p><img src="https://windchang1999.github.io/post-images/1627825450356.png" alt="" loading="lazy"><br>
+较大程度地降低了 fork 过程所使用的时间，使得主要开销移动到测试用例的运行中。</p>
+<h3 id="423-snapshots-redis">4.2.3 Snapshots: Redis</h3>
+<p><img src="https://windchang1999.github.io/post-images/1627825534681.png" alt="" loading="lazy"><br>
+latency 更低，波动更小，且对 tail latency 降低明显。</p>
+<h3 id="424-triforceafl-vm-cloning">4.2.4 TriforceAFL: VM Cloning</h3>
+<p><img src="https://windchang1999.github.io/post-images/1627825589905.png" alt="" loading="lazy"><br>
+大约同 4.2.1。</p>
+<h3 id="425-apache-http-server-on-demand-fork-不能加速的例子">4.2.5 Apache HTTP Server （on-demand-fork 不能加速的例子）</h3>
+<p><img src="https://windchang1999.github.io/post-images/1627825634742.png" alt="" loading="lazy"><br>
+因为 HTTP Server 并非内存大户（在测试中 Apache 仅用了 7MB 内存），因此 fork 过程中的瓶颈并不是页表的复制，因此 on-demand-fork 和 fork 的表现没有明显的区别。</p>
+<h1 id="5-不足之处">5. 不足之处</h1>
+<ol>
+<li>论文中对 fork 的并发性能做了测试（3个相同的进程同时执行 fork），但没有对 on-demand-fork 做相同的测试</li>
+<li>在 on-demand-fork 过程中只针对页表进行了 COW 操作。是否可以找一些其他的场景，将 COW 操作运用到 fork 过程中需要复制的其他内核变量上？</li>
+</ol>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li><a href="#1-introduction">1. Introduction</a></li>
+<li><a href="#2-background-motivation">2. Background &amp; Motivation</a></li>
+<li><a href="#3-implementation">3. Implementation</a>
+<ul>
+<li><a href="#31-overview">3.1 Overview</a></li>
+<li><a href="#32-fork-%E8%BF%87%E7%A8%8B%E4%B8%AD%E9%A1%B5%E8%A1%A8%E5%A4%8D%E5%88%B6%E6%B5%81%E7%A8%8B">3.2 fork 过程中页表复制流程</a></li>
+<li><a href="#33-%E5%AF%B9%E5%86%85%E5%AD%98%E5%86%99%E5%BC%95%E8%B5%B7-page-fault-%E7%9A%84%E6%B5%81%E7%A8%8B">3.3 对内存写引起 Page Fault 的流程</a></li>
+<li><a href="#34-unmapping-or-remapping-vmas">3.4 Unmapping or Remapping VMAs</a></li>
+</ul>
+</li>
+<li><a href="#4-evaluation">4. Evaluation</a>
+<ul>
+<li><a href="#40-setup">4.0 Setup</a></li>
+<li><a href="#41-microbenchmarks">4.1 Microbenchmarks</a>
+<ul>
+<li><a href="#411-system-call-latency">4.1.1 System Call Latency</a></li>
+<li><a href="#412-page-fault-handling-overhead">4.1.2 Page Fault Handling Overhead</a></li>
+<li><a href="#413-overall-performance">4.1.3 Overall Performance</a></li>
+</ul>
+</li>
+<li><a href="#42-real-world-applications">4.2 Real-world Applications</a>
+<ul>
+<li><a href="#421-fuzzing-afl">4.2.1 Fuzzing: AFL</a></li>
+<li><a href="#422-unit-testing-sqlite">4.2.2 Unit Testing: SQLite</a></li>
+<li><a href="#423-snapshots-redis">4.2.3 Snapshots: Redis</a></li>
+<li><a href="#424-triforceafl-vm-cloning">4.2.4 TriforceAFL: VM Cloning</a></li>
+<li><a href="#425-apache-http-server-on-demand-fork-%E4%B8%8D%E8%83%BD%E5%8A%A0%E9%80%9F%E7%9A%84%E4%BE%8B%E5%AD%90">4.2.5 Apache HTTP Server （on-demand-fork 不能加速的例子）</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><a href="#5-%E4%B8%8D%E8%B6%B3%E4%B9%8B%E5%A4%84">5. 不足之处</a></li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://windchang1999.github.io/post/a-linux-in-unikernel-clothing/">
+              <h3 class="post-title">
+                A Linux in Unikernel Clothing
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="https://github.com/getgridea/gridea" target="_blank"> Gridea</a>
+  <a class="rss" href="https://windchang1999.github.io/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>
