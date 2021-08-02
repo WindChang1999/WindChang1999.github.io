@@ -3,7 +3,7 @@
     <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>ON-DEMAND-FORK: A Microsecond Fork for Memory-Intensive and Latency-Sensitive Application | windchang1999&#39;s blog</title>
-<link rel="shortcut icon" href="https://windchang1999.github.io/favicon.ico?v=1627877365347">
+<link rel="shortcut icon" href="https://windchang1999.github.io/favicon.ico?v=1627878121848">
 <link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
 <link rel="stylesheet" href="https://windchang1999.github.io/styles/main.css">
 <link rel="alternate" type="application/atom+xml" title="ON-DEMAND-FORK: A Microsecond Fork for Memory-Intensive and Latency-Sensitive Application | windchang1999&#39;s blog - Atom Feed" href="https://windchang1999.github.io/atom.xml">
@@ -24,7 +24,7 @@
       <div class="main-content">
         <div class="site-header">
   <a href="https://windchang1999.github.io">
-  <img class="avatar" src="https://windchang1999.github.io/images/avatar.png?v=1627877365347" alt="">
+  <img class="avatar" src="https://windchang1999.github.io/images/avatar.png?v=1627878121848" alt="">
   </a>
   <h1 class="site-title">
     windchang1999&#39;s blog
@@ -128,7 +128,7 @@
 <ol>
 <li>复制最后一级页表，更新 PMD 指向新的最后一级页表，降低其引用计数</li>
 <li>复制数据物理页，更新 PTE 指向新的数据物理页<br>
-&lt;需要插入一张图片&gt;</li>
+<img src="https://windchang1999.github.io/post-images/1627878119864.png" alt="" loading="lazy"></li>
 </ol>
 <h2 id="34-unmapping-or-remapping-vmas">3.4 Unmapping or Remapping VMAs</h2>
 <p>Unmapping 和 Remapping 需要修改进程的页表内容，因此如果修改过程中发现共享的最后一级页表，那么则需要执行相应的操作。以 munmap 为例：</p>
